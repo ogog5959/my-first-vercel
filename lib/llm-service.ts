@@ -25,34 +25,57 @@ export interface AdviceResponse {
 
 class LLMService {
   private async makeRequest(messages: Message[]): Promise<any> {
-    try {
-      // Gemini API로 보낼 때 system 역할 메시지 제외
-      const contents = messages
-        .filter(msg => msg.role !== 'system')
-        .map(msg => ({
-          role: msg.role === 'assistant' ? 'model' : 'user',
-          parts: [{ text: msg.content }]
-        }))
+    const maxRetries = 3;
+    let lastError: any;
 
-      const response = await fetch('/api/llm', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ messages: contents }),
-      })
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        // Gemini API로 보낼 때 system 역할 메시지 제외
+        const contents = messages
+          .filter(msg => msg.role !== 'system')
+          .map(msg => ({
+            role: msg.role === 'assistant' ? 'model' : 'user',
+            parts: [{ text: msg.content }]
+          }))
 
-      if (!response.ok) {
-        const text = await response.text()
-        throw new Error(`API request failed: ${response.status} - ${text}`)
+        const response = await fetch('/api/llm', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ messages: contents }),
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json();
+          
+          // 503 에러인 경우 재시도
+          if (response.status === 503 && attempt < maxRetries) {
+            console.log(`LLM API 503 에러, ${attempt}번째 재시도 중... (${maxRetries - attempt}번 남음)`);
+            await new Promise(resolve => setTimeout(resolve, 1000 * attempt)); // 지수 백오프
+            lastError = errorData;
+            continue;
+          }
+          
+          throw new Error(`API request failed: ${response.status} - ${JSON.stringify(errorData)}`);
+        }
+
+        const data = await response.json();
+        return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      } catch (error) {
+        lastError = error;
+        
+        // 네트워크 에러나 503이 아닌 에러인 경우 재시도하지 않음
+        if (attempt === maxRetries || !(error instanceof Error && error.message.includes('503'))) {
+          throw error;
+        }
+        
+        console.log(`LLM API 에러, ${attempt}번째 재시도 중... (${maxRetries - attempt}번 남음)`);
+        await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
       }
-
-      const data = await response.json()
-      return data.candidates?.[0]?.content?.parts?.[0]?.text || ''
-    } catch (error) {
-      console.error('LLM API request failed:', error)
-      throw error
     }
+
+    throw lastError;
   }
 
   // 대화 시작
