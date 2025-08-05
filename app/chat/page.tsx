@@ -266,9 +266,68 @@ export default function ChatPage() {
     }
   }
 
-  const handleEndCall = () => {
+  const handleEndCall = async () => {
     if (typeof window !== 'undefined') {
+      // 대화 히스토리 저장
       localStorage.setItem('thanksToMe_conversationHistory', JSON.stringify(conversationHistory));
+      
+      // 히스토리에 오늘 세션 저장
+      const today = new Date().toISOString().split('T')[0];
+      const existingHistory = localStorage.getItem('thanksToMe_history');
+      const historyData = existingHistory ? JSON.parse(existingHistory) : {};
+      
+      // 이미 오늘 기록이 있으면 저장하지 않음
+      if (!historyData[today] && conversationHistory.length > 0) {
+        try {
+          // LLM 서비스로 요약 및 조언 생성
+          const { llmService } = await import('@/lib/llm-service');
+          
+          const summary = await llmService.summarizeConversation(conversationHistory);
+          const advice = await llmService.generateAdvice(summary.points);
+          
+          // 전체 분위기 분석
+          const userMessages = conversationHistory.filter((msg: any) => msg.role === 'user');
+          const positiveWords = ['좋', '감사', '행복', '기쁘', '만족', '즐거', '평화', '희망'];
+          const negativeWords = ['힘들', '어렵', '스트레스', '불안', '걱정', '화나', '슬프'];
+          
+          let positiveCount = 0;
+          let negativeCount = 0;
+          
+          userMessages.forEach((msg: any) => {
+            positiveWords.forEach(word => {
+              if (msg.content.includes(word)) positiveCount++;
+            });
+            negativeWords.forEach(word => {
+              if (msg.content.includes(word)) negativeCount++;
+            });
+          });
+          
+          let overallMood = '중립적';
+          if (positiveCount > negativeCount) {
+            overallMood = '긍정적';
+          } else if (negativeCount > positiveCount) {
+            overallMood = '부정적';
+          }
+
+          // 세션 시간 계산
+          const sessionTime = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+
+          const newEntry = {
+            date: today,
+            overallMood,
+            gratitudePoints: summary.points,
+            discovery: advice.discovery,
+            sessionTime,
+            conversationCount: conversationHistory.length
+          };
+
+          // 히스토리에 저장
+          const updatedData = { ...historyData, [today]: newEntry };
+          localStorage.setItem('thanksToMe_history', JSON.stringify(updatedData));
+        } catch (error) {
+          console.error('히스토리 저장 실패:', error);
+        }
+      }
     }
     router.push("/summary");
   };
